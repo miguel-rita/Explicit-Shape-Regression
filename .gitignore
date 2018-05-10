@@ -3,3 +3,4 @@
 /processed_data/*
 !data.txt
 !processed_data.txt
+face_detection/__pycache__/*
