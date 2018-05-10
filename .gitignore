@@ -1,0 +1,5 @@
+/data/*
+/.idea/*
+/processed_data/*
+!data.txt
+!processed_data.txt
