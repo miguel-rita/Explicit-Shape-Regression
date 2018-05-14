@@ -4,3 +4,5 @@
 !data.txt
 !processed_data.txt
 face_detection/__pycache__/*
+.DS_Store
+/utils/__pycache__/*

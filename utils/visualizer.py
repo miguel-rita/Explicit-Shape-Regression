@@ -37,7 +37,7 @@ def visualizer(images, bboxes=None, landmarks=None):
         if isDrawingOn:
             if not landmarks is None:
                 for lm in landmarks[currentImageNum]:
-                    currentImage = cv2.circle(currentImage, (lm[0], lm[1]), landmarkRadius, landmarkColor1, -1)
+                    currentImage = cv2.circle(currentImage, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor1, -1)
             if not bboxes is None:
                 for face in bboxes[currentImageNum].astype('int32'):
                     currentImage = cv2.rectangle(currentImage, (face[0], face[1]), (face[2], face[3]), bbox_color,
@@ -55,9 +55,10 @@ def visualizer(images, bboxes=None, landmarks=None):
             currentImageNum -= 1
         if key == ord('d') and currentImageNum<len(images)-1:
             currentImageNum += 1
-        elif key == ord('s'):
+        if key == ord('s'):
             isDrawingOn = not isDrawingOn
-        elif key == ord('q'):  # Quit visualization
+        if key == ord('q'):  # Quit visualization
+            print('Quitting visualization ...')
             visualizerRunning = False
 
 
