@@ -171,7 +171,7 @@ def main():
     old_dataset_image_path = curr_dir + '/data/AFW/'
     old_dataset_landmark_path = curr_dir + '/data/landmarks/AFW/'
     new_dataset_path = curr_dir + '/processed_data/AFW/'
-    scale_factor = 1.5
+    scale_factor = 2.0
 
     process_dataset(old_dataset_image_path, old_dataset_landmark_path, new_dataset_path, scale_factor)
 
