@@ -77,6 +77,9 @@ class ESRegressor:
         :return: --
         '''
 
+        # Property assignments
+        self.num_features = num_features
+
         for stage in tqdm.tqdm(range(0, num_stages), total=num_stages, unit='stage',
                                desc='Overall training progress', position=0): # For each stage in the regressor, we must ...
 
@@ -203,6 +206,16 @@ class ESRegressor:
         # Regress shapes for this stage
         for stage_regressor in self.stage_regressors:
 
+            # Get inverse transforms for this stage
+
+            M_inverse_transforms = []
+
+            for _img, shape in initialized_images:
+                scaling_factor = 1.0
+                normalizing_transform, _ = orthogonal_procrustes(shape * scaling_factor, self.mean_shape)
+                normalizing_transform *= scaling_factor
+                M_inverse_transforms.append(np.linalg.inv(normalizing_transform))
+
             local_coords = stage_regressor[1]
 
             pixel_feats = self.extract_shape_indexed_pixels([t[0] for t in self.training_set],
@@ -215,11 +228,7 @@ class ESRegressor:
                                                      [t[1] for t in initialized_images])
 
             for i, (img, shape) in enumerate(initialized_images):
-                # Compute inverse transform
-                scaling_factor = 1.0
-                normalizing_transform, _ = orthogonal_procrustes(shape * scaling_factor, self.mean_shape)
-                normalizing_transform *= scaling_factor
-                inverse_transform = np.linalg.inv(normalizing_transform)
+
 
                 # Update shapes to original spaces, for next stage
                 initialized_images[i][1] += np.matmul(stage_output[i], inverse_transform)
@@ -241,8 +250,12 @@ class ESRegressor:
         :return: 
         '''
 
+        # Load stage regressors. Each regressor is a pair (regressor parameters, associated local coords)
         with open(saved_weights_path, 'rb') as h:
             self.stage_regressors = pickle.load(h)
+
+        # Update class properties
+        self.num_features = len(self.stage_regressors[0][1]) # Infer number of features used by regressors
 
     def train_stage_regressor(self, Y_normalized_targets, num_features, num_ferns, num_fern_levels,
                               pixel_features, threshold_multiplier = 0.2, beta = 5):
@@ -262,7 +275,7 @@ class ESRegressor:
         # I. Initial setup
 
         # 1. Compute pixel-pixel covariance matrix
-        pix2pix_cov_matrix = np.cov(pixel_feats, rowvar=False)
+        pix2pix_cov_matrix = np.cov(pixel_features, rowvar=False)
 
         # 2. Initialize current regressed displacements as the original target displacements
         Y_current = Y_normalized_targets
@@ -279,7 +292,7 @@ class ESRegressor:
 
             # ... select the best pixel-difference features for this fern ...
             selected_pixel_diff_features, diff_indexes = self.correlation_feature_selection(Y_current, num_features,
-                                                                                            pixel_feats,
+                                                                                            pixel_features,
                                                                                             pix2pix_cov_matrix,
                                                                                             num_fern_levels)
 
@@ -376,14 +389,13 @@ class ESRegressor:
 
 
 
-    def correlation_feature_selection(self, Y_regression_target, num_features, pixel_features,
+    def correlation_feature_selection(self, Y_regression_target, pixel_features,
                                       pix2pix_cov_matrix, num_fern_levels):
         '''
         Select 'num_fern_levels' pixel difference features with highest correlation to displacement projections
         as detailed in the paper
         
         :param Y_regression_target:
-        :param num_features:
         :param pixel_features:
         :param pix2pix_cov_matrix: 
         :param num_fern_levels: 
@@ -403,10 +415,10 @@ class ESRegressor:
             # Projected target for this fern level
             Y_proj = np.squeeze(np.matmul(Y_regression_target, gaussian_proj))
 
-            target_pix_cov = np.zeros(num_features) # Placeholder, filled below
+            target_pix_cov = np.zeros(self.num_features) # Placeholder, filled below
 
             # Compute target-pixel covariance
-            for i in range(num_features):
+            for i in range(self.num_features):
                 target_pix_cov[i] = np.cov(Y_proj, pixel_features[:, i])[0, 1] # [0, 1] (or [1, 0]) to fetch the
                 # covariance term from the covariance matrix
 
@@ -414,10 +426,10 @@ class ESRegressor:
             Y_var = np.var(Y_proj)
 
             # To be filled below
-            corr_matrix = np.ones((num_features, num_features)) * -1
+            corr_matrix = np.ones((self.num_features, self.num_features)) * -1
 
-            for i in range(num_features):
-                for j in range(num_features):
+            for i in range(self.num_features):
+                for j in range(self.num_features):
 
                     denominator = np.sqrt(
                         Y_var * (pix2pix_cov_matrix[i,i] + pix2pix_cov_matrix[j,j] - 2 * pix2pix_cov_matrix[i,j]) )
@@ -460,17 +472,26 @@ class ESRegressor:
 
         return final_bin_numbers.astype('int16')
 
-    def extract_shape_indexed_pixels(self, images, current_shapes, num_features, local_coords, inverse_transforms):
+    def extract_shape_indexed_pixels(self, images, current_shapes, local_coords, inverse_transforms,
+                                     selected_feature_numbers = None):
         '''
-        Extract pixel intensities in the original image-shape pairs provided, in global coordinates
+        Extract self.num_features pixel intensities for each image in the original image-shape pairs provided,
+        in global coordinates.  If 'selected_feature_numbers' is specified, will only extract features indexed by
+        those numbers. Check 'return' below for more details
         
-        :param images: 
-        :param current_shapes: 
-        :param num_features: 
-        :param local_coords: 
-        :param inverse_transforms: 
-        :return: TODO
+        :param images: (list of np arrays) Images from which to extract pixel intensities (features)
+        :param current_shapes: (list of np arrays) Current shapes associated with 'images' 
+        :param local_coords: (np array) N-by-m array where N = number of features to extract per image, and m = 3,
+        with format [num_associated_landmark, x_offset, y_offset]
+        :param inverse_transforms: (list of np arrays) Inverse transforms back to original 'current_shapes' space
+        :param selected_feature_numbers: (list of ints) If specified, will only extract the features corresponding to
+        the local coordinates indexed by the numbers in 'selected_feature_numbers'. See 'return' below
+        :return: A n-by-m numpy array, where n = number of images (len(images)), and m = number of features
+        self.num_features, with contents being pixel intensities. Note that normally num_features = len('local_coords'),
+        unless 'selected_feature_numbers' is specified, in which case num_features = len('selected_feature_numbers')
         '''
+
+        num_features = len(selected_feature_numbers) if selected_feature_numbers is not None else self.num_features
 
         pixel_feats = np.zeros((len(images), num_features))  # Placeholder for pixel intensities
         pixel_feats_y_dim, pixel_feats_x_dim = pixel_feats.shape
@@ -481,37 +502,33 @@ class ESRegressor:
             for j in range(pixel_feats_x_dim):
 
                 # Get landmark coords in start_pos for the sample being requested (sample i) for the landmark being
-                # requested (must check which landmark is associated with the feature being requested, feature j)
-                landmark_coords_in_start_pos = current_shapes[i][local_coords[j, 0], :]
+                # requested (must check which landmark is associated with the feature being requested, feature j). Note
+                # that feature being request might be specified in 'selected_feature_numbers'
+                k = selected_feature_numbers[j] if selected_feature_numbers is not None else j
+
+                landmark_coords_in_start_pos = current_shapes[i][local_coords[k, 0], :]
 
                 # Transform the local coords back to 'start_pos space'
                 local_coords_transformed_back_to_start_pos = np.matmul(inverse_transforms[i],
-                                                                       local_coords[j, 1:])
+                                                                       local_coords[k, 1:])
                 global_coords = local_coords_transformed_back_to_start_pos + landmark_coords_in_start_pos
                 global_coordinates[j, 2 * i:2 * i + 2] = global_coords
 
-                # Ensure global coords do not go outside image
-                # TODO
-
-                if global_coords[0] > 449 or global_coords[1] > 449 or global_coords[0] < 0 or global_coords[1] < 0:
-                    print('alarm')
-                # Grab pixels from the start_pos image
-                pixel_feats[i, j] = images[i][int(global_coords[1]), int(global_coords[0])]
+                # TODO : Ensure global coords do not go outside image
 
         return pixel_feats
 
-    def generate_local_coordinates(self, num_features, local_random_displacement):
+    def generate_local_coordinates(self, local_random_displacement):
         '''
         Generate random local coordinate offsets relative to random landmarks
         
-        :param num_features: 
         :param local_random_displacement: 
         :return: TODO
         '''
         displacements = np.random.randint(-local_random_displacement, local_random_displacement,
-                                                 size=(num_features, 2)) # Offsets to add to each landmark location
+                                                 size=(self.num_features, 2)) # Offsets to add to each landmark location
 
-        landmark_indexes = np.random.randint(self.number_of_landmarks, size=(num_features, 1)) # Random landmark
+        landmark_indexes = np.random.randint(self.number_of_landmarks, size=(self.num_features, 1)) # Random landmark
         # locations
 
         return np.hstack((landmark_indexes, displacements)) # Combine both
