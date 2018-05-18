@@ -168,12 +168,15 @@ def main():
     os.chdir('..')
     curr_dir = os.getcwd()
 
-    old_dataset_image_path = curr_dir + '/data/AFW/'
-    old_dataset_landmark_path = curr_dir + '/data/landmarks/AFW/'
-    new_dataset_path = curr_dir + '/processed_data/AFW/'
-    scale_factor = 2.0
+    image_directories = ['HELEN/', 'IBUG/', 'LFPW/']
 
-    process_dataset(old_dataset_image_path, old_dataset_landmark_path, new_dataset_path, scale_factor)
+    for dir in image_directories:
+        old_dataset_image_path = curr_dir + '/data/' + dir
+        old_dataset_landmark_path = curr_dir + '/data/landmarks/' + dir
+        new_dataset_path = curr_dir + '/processed_data/' + dir
+        scale_factor = 2.0
+
+        process_dataset(old_dataset_image_path, old_dataset_landmark_path, new_dataset_path, scale_factor)
 
 if __name__ == '__main__':
     main()

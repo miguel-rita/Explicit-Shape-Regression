@@ -90,7 +90,10 @@ def detect_face_batch_from_directory(image_directory, image_extension = '.jpg', 
     image_names_full_paths = glob.glob(image_directory + '/*.' + image_extension)
     images_names_no_path = [name.split('/')[-1] for name in image_names_full_paths]
 
-    image_list = [cv2.imread(img_path) for img_path in image_names_full_paths]
+    image_list = []
+    print("Loading images into memory for face detection . . .")
+    for img_path in tqdm.tqdm(image_names_full_paths, total=len(image_names_full_paths), unit=' Images'):
+        image_list.append(cv2.imread(img_path))
 
     return detect_face_batch(image_list, images_names_no_path, are_images_rgb=False,
                              minimum_window_size=minimum_window_size, thresholds=thresholds,

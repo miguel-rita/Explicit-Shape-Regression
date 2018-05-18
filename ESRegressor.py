@@ -148,7 +148,7 @@ class ESRegressor:
             # II. Train and store current stage regressor
 
             # 1. First generate local coordinates ...
-            local_coords = self.generate_local_coordinates(num_features, local_random_displacement)
+            local_coords = self.generate_local_coordinates(local_random_displacement)
 
             # 2. ... then get feature locations and pixel intensities in original image, global coordinates ...
 
@@ -157,7 +157,7 @@ class ESRegressor:
 
             pixel_feats = self.extract_shape_indexed_pixels([t[0] for t in self.training_set],
                                                             [t[2] for t in self.training_set],
-                                                            num_features, local_coords, M_inverse_transforms)
+                                                            local_coords, M_inverse_transforms)
 
             # 3. Finally train the stage regressor. Note 'pixel_feats' were computed outside 'train_stage_regressor'
             # function to be reused below (see step III.)
@@ -167,7 +167,7 @@ class ESRegressor:
             self.stage_regressors.append((current_stage_regressor, local_coords))
 
             # III. Update starting shapes in 'self.training_set' for next stage
-            stage_regressor_output = self.test_stage_regressor(current_stage_regressor[0], current_stage_regressor[1],
+            stage_regressor_output = self.test_stage_regressor(current_stage_regressor, local_coords,
                                                                pixel_feats, [t[0] for t in self.training_set],
                                                                [t[2] for t in self.training_set])
 
@@ -183,7 +183,7 @@ class ESRegressor:
 
     def test(self, images, bagging_size):
         '''
-        TODO
+        TODO - BW
         
         :param images: 
         :param bagging_size: 
@@ -193,7 +193,7 @@ class ESRegressor:
         if bagging_size > len(self.test_start_shapes):
             raise ValueError('Not enough starting shapes initialized for selected bagging size')
 
-        # Starting images will each have 'bagging_size' starting shapes
+        # Starting images will be converted to BW and will each have 'bagging_size' starting shapes
         # np.copy to avoid having multiple equal starting shapes (but associated with different images) pointing
         # to the same memory address
 
@@ -201,7 +201,7 @@ class ESRegressor:
 
         for img in images:
             for i in range(bagging_size):
-                initialized_images.append([img, np.copy(self.test_start_shapes[i])])
+                initialized_images.append([cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), np.copy(self.test_start_shapes[i])])
 
         # Regress shapes for this stage
         for stage_regressor in self.stage_regressors:
@@ -218,24 +218,22 @@ class ESRegressor:
 
             local_coords = stage_regressor[1]
 
-            pixel_feats = self.extract_shape_indexed_pixels([t[0] for t in self.training_set],
-                                                            [t[2] for t in self.training_set],
-                                                            num_features, local_coords, M_inverse_transforms)
+            pixel_feats = self.extract_shape_indexed_pixels([t[0] for t in initialized_images],
+                                                            [t[1] for t in initialized_images],
+                                                            local_coords, M_inverse_transforms)
 
             # Get stage regressions in 'mean shape space'
             stage_output = self.test_stage_regressor(stage_regressor[0], stage_regressor[1], pixel_feats,
                                                      [t[0] for t in initialized_images],
                                                      [t[1] for t in initialized_images])
 
-            for i, (img, shape) in enumerate(initialized_images):
-
-
+            for i in range(len(initialized_images)):
                 # Update shapes to original spaces, for next stage
-                initialized_images[i][1] += np.matmul(stage_output[i], inverse_transform)
+                initialized_images[i][1] += np.matmul(stage_output[i], M_inverse_transforms[i])
 
         # Bag results using median landmark values as in the paper and return them
         final_shapes = []
-        for i in len(images):
+        for i in range(len(images)):
             final_shapes_for_this_image = [t[1] for t in initialized_images[i*bagging_size:(i+1)*bagging_size]]
             median_shape = np.median(final_shapes_for_this_image, axis=0) # Axis 0 to get median across shapes only
             final_shapes.append(median_shape)
@@ -291,7 +289,7 @@ class ESRegressor:
                                      position=1): # For each weak regressor ...
 
             # ... select the best pixel-difference features for this fern ...
-            selected_pixel_diff_features, diff_indexes = self.correlation_feature_selection(Y_current, num_features,
+            selected_pixel_diff_features, diff_indexes = self.correlation_feature_selection(Y_current,
                                                                                             pixel_features,
                                                                                             pix2pix_cov_matrix,
                                                                                             num_fern_levels)
@@ -322,7 +320,7 @@ class ESRegressor:
                     bin_outputs.append(np.average(basket, axis=0) * 1/(1 + beta/len(basket)))
 
             # ... and build the fern
-            stage_ferns.append([thresholds, diff_indexes, bin_outputs])
+            stage_ferns.append((thresholds, diff_indexes, bin_outputs))
 
             # Update regression targets for next weak regressor
             for training_sample_number, bin_index in enumerate(bin_index_per_training_sample):
@@ -361,25 +359,25 @@ class ESRegressor:
 
         delta_shapes = [shape * 0 for shape in current_shapes] # Placeholder for the regressions for each shape
 
-        for k, fern in enumerate(stage_ferns):
+        for (thresholds, feat_differences, bin_outputs) in stage_ferns:
 
             # Reminder: a fern is a (a,b,c) tuple where a=thresholds, b=feature difference indexes, c=bin outputs
 
             # 1. Get selected feature differences for this fern
 
-            selected_feats = np.zeros((len(images), len(fern[0]))) # Placeholder for a n-by-m matrix, where n is the
+            selected_feats = np.zeros((len(images), len(thresholds))) # Placeholder for a n-by-m matrix, where n is the
             # number of training images and m is the number of levels in a fern (here extracted by number of thresholds)
 
-            for iii, (i,j) in enumerate(fern[1]):
+            for iii, (i,j) in enumerate(feat_differences):
                 selected_feats[:, iii] = pixel_features[:, i] - pixel_features[:, j]
 
             # 2. Get bin numbers for all images
 
-            bin_numbers = self.compute_fern_bin(selected_feats, fern[0])
+            bin_numbers = self.compute_fern_bin(selected_feats, thresholds)
 
             # 3. Get and reshape fern output and add to current offsets
 
-            fern_outputs = [fern[2][bin_number] for bin_number in bin_numbers]
+            fern_outputs = [bin_outputs[bin_number] for bin_number in bin_numbers]
             final_deltas = [np.reshape(fern_output, (self.number_of_landmarks, 2)) for fern_output in fern_outputs]
 
             for i, final_delta in enumerate(final_deltas):
@@ -395,7 +393,7 @@ class ESRegressor:
         Select 'num_fern_levels' pixel difference features with highest correlation to displacement projections
         as detailed in the paper
         
-        :param Y_regression_target:
+        :param Y_regression_target: TODO
         :param pixel_features:
         :param pix2pix_cov_matrix: 
         :param num_fern_levels: 
@@ -472,28 +470,22 @@ class ESRegressor:
 
         return final_bin_numbers.astype('int16')
 
-    def extract_shape_indexed_pixels(self, images, current_shapes, local_coords, inverse_transforms,
-                                     selected_feature_numbers = None):
+    def extract_shape_indexed_pixels(self, images, current_shapes, local_coords, inverse_transforms):
         '''
         Extract self.num_features pixel intensities for each image in the original image-shape pairs provided,
-        in global coordinates.  If 'selected_feature_numbers' is specified, will only extract features indexed by
-        those numbers. Check 'return' below for more details
+        in global coordinates
         
         :param images: (list of np arrays) Images from which to extract pixel intensities (features)
         :param current_shapes: (list of np arrays) Current shapes associated with 'images' 
         :param local_coords: (np array) N-by-m array where N = number of features to extract per image, and m = 3,
         with format [num_associated_landmark, x_offset, y_offset]
         :param inverse_transforms: (list of np arrays) Inverse transforms back to original 'current_shapes' space
-        :param selected_feature_numbers: (list of ints) If specified, will only extract the features corresponding to
         the local coordinates indexed by the numbers in 'selected_feature_numbers'. See 'return' below
         :return: A n-by-m numpy array, where n = number of images (len(images)), and m = number of features
-        self.num_features, with contents being pixel intensities. Note that normally num_features = len('local_coords'),
-        unless 'selected_feature_numbers' is specified, in which case num_features = len('selected_feature_numbers')
+        self.num_features, with contents being pixel intensities.
         '''
 
-        num_features = len(selected_feature_numbers) if selected_feature_numbers is not None else self.num_features
-
-        pixel_feats = np.zeros((len(images), num_features))  # Placeholder for pixel intensities
+        pixel_feats = np.zeros((len(images), self.num_features))  # Placeholder for pixel intensities
         pixel_feats_y_dim, pixel_feats_x_dim = pixel_feats.shape
         global_coordinates = np.zeros(
             (2 * pixel_feats_x_dim, 2 * pixel_feats_y_dim))  # Place holder for global coordinates
@@ -502,19 +494,22 @@ class ESRegressor:
             for j in range(pixel_feats_x_dim):
 
                 # Get landmark coords in start_pos for the sample being requested (sample i) for the landmark being
-                # requested (must check which landmark is associated with the feature being requested, feature j). Note
-                # that feature being request might be specified in 'selected_feature_numbers'
-                k = selected_feature_numbers[j] if selected_feature_numbers is not None else j
+                # requested (must check which landmark is associated with the feature being requested, feature j).
 
-                landmark_coords_in_start_pos = current_shapes[i][local_coords[k, 0], :]
+                landmark_coords_in_start_pos = current_shapes[i][local_coords[j, 0], :]
 
                 # Transform the local coords back to 'start_pos space'
                 local_coords_transformed_back_to_start_pos = np.matmul(inverse_transforms[i],
-                                                                       local_coords[k, 1:])
+                                                                       local_coords[j, 1:])
                 global_coords = local_coords_transformed_back_to_start_pos + landmark_coords_in_start_pos
                 global_coordinates[j, 2 * i:2 * i + 2] = global_coords
 
                 # TODO : Ensure global coords do not go outside image
+
+                # Grab pixels from the start_pos image
+                a = pixel_feats[i, j]
+                b = images[i][int(global_coords[1]), int(global_coords[0])]
+                pixel_feats[i, j] = images[i][int(global_coords[1]), int(global_coords[0])]
 
         return pixel_feats
 
@@ -560,7 +555,7 @@ def main():
     images = []
     landmarks = []
 
-    for img_name in small_pose_image_names[:-50]:
+    for img_name in small_pose_image_names[:-100]:
         # Load image
         images.append(cv2.imread(img_name + imageExtension))
         # Load landmarks
@@ -570,30 +565,31 @@ def main():
 
     os.chdir('../..')
     pwd = os.getcwd()
-    weights_path = pwd + '/processed_data/esr_weights_v1.pickle'
+    weights_path = pwd + '/processed_data/esr_weights_v1beta.pickle'
     os.chdir('./processed_data/' + datasetName)
 
     R = ESRegressor(images, landmarks, 20, 20)
 
     print("Save path:",weights_path,"Train set len:",len(images))
-    R.train(num_features=400, num_stages=1, num_ferns=10, local_random_displacement=15, save_weights=weights_path)
+    R.train(num_features=100, num_stages=1, num_ferns=100, local_random_displacement=15, save_weights=weights_path)
     R.load_weights(weights_path)
 
     # Grab some images for testing
     test_images = []
     test_landmarks = []
 
-    for img_name in small_pose_image_names[-50:]:
+    for img_name in small_pose_image_names[-100:]:
         # Load image
         test_images.append(cv2.imread(img_name + imageExtension))
         # Load landmarks
         test_landmarks.append(loadmat(img_name + '_pts.mat')['pts_2d'])
 
-    #regressed_landmarks = R.test(test_images, 15)
-    #visualizer(test_images, landmarks=regressed_landmarks)
+    # regressed_landmarks = R.test(test_images, 15)
+    # visualizer(test_images, landmarks=regressed_landmarks)
 
 if __name__ == '__main__':
-    log_name = 'profiling_log1.txt'
+    log_name = os.getcwd() + '/profiling_log2.txt'
     cProfile.run('main()', log_name)
     p = pstats.Stats(log_name)
-    p.strip_dirs().sort_stats('cumulative').print_stats(10)
+    p.strip_dirs().sort_stats('line').print_stats()
+    p.sort_stats('cumulative').print_callees('correlation_feature_selection')
