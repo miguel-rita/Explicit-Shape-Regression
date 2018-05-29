@@ -110,7 +110,7 @@ def test2():
 
     # Load processed images and landmarks
 
-    datasetName = 'AFW/' # pick numImages first images from this dataset
+    datasetName = 'testAFW/' # pick numImages first images from this dataset
     imageExtension = '.jpg'
 
     os.chdir('../processed_data/'+datasetName) # switch to dataset dir
