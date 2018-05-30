@@ -4,6 +4,7 @@ import face_detection.detect_face as mtcnn
 from scipy.io import loadmat
 import tensorflow as tf
 import ESRegressor
+from utils.extract_chip import extract_chip
 
 def main():
     '''
@@ -25,7 +26,7 @@ def main():
     pnet, rnet, onet = mtcnn.create_mtcnn(sess, None)
 
     # Set cascade parameters
-    minsize = 40  # Minimum window size to be detected in pixels
+    minsize = 90  # Minimum window size to be detected in pixels
     threshold = [.6, .7, .7]  # Quality threshold for all cascade levels
     factor = .709  # Image pyramid scaling factor
 
@@ -43,11 +44,11 @@ def main():
     ground_truth_landmarks = []
     sample_images = []
     for lm_name in landmark_names:
-        ground_truth_landmarks.append(loadmat(img_name + '_pts.mat')['pts_2d'])
-    for img in sample_images[:2]:
+        ground_truth_landmarks.append(loadmat(lm_name)['pts_2d'])
+    for img in image_names[:50]:
         sample_images.append(cv2.imread(img))
 
-    R = ESRegressor(sample_images, ground_truth_landmarks, 20, 20)
+    R = ESRegressor.ESRegressor(sample_images, ground_truth_landmarks, 20, 20)
 
     R.load_weights(weights_path)
 
@@ -80,53 +81,51 @@ def main():
         Detect faces
         '''
 
-        rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)  # MTCNN trained on RGB images
+        current_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)  # MTCNN reads RGB images
 
         # Run MTCNN detector
         # Output 'faces' is a n-by-m matrix where n is the num of faces detected and m=5 has bounding box info for each
         # face in the format xmin, ymin, xmax, ymax, confidence
 
-        faces, _ = mtcnn.detect_face(rgb_frame, minsize, pnet, rnet, onet, threshold, factor)
+        faces, _ = mtcnn.detect_face(current_frame, minsize, pnet, rnet, onet, threshold, factor)
+
+        # Put frame back to BGR
+
+        current_frame = cv2.cvtColor(current_frame, cv2.COLOR_RGB2BGR)
 
         num_faces_found, _ = faces.shape
 
-        if num_faces_found < 1:  # If no faces found append None placeholder
-            continue
+        if num_faces_found > 0:
 
-        '''
-        Detect landmarks for all detected faces
-        '''
+            '''
+            Extract face chip
+            '''
+            scale = 2.0
+            face_chip, final_bbox = extract_chip(current_frame, faces[0, :-1], scale)
 
-        # Grab some images for testing
-        test_images = []
-        test_landmarks = []
+            '''
+            Detect landmarks for all detected faces
+            '''
 
-        for img_name in small_pose_image_names[-100:]:
-            # Load image
-            test_images.append(cv2.imread(img_name + imageExtension))
-            # Load landmarks
-            test_landmarks.append(loadmat(img_name + '_pts.mat')['pts_2d'])
+            face_chip = cv2.resize(face_chip, (450, 450))
+            regressed_landmarks = R.test([face_chip], 20)
 
-            # regressed_landmarks = R.test(test_images, 15)
+            '''
+            Draw landmarks and bboxes
+            '''
 
-        '''
-        Draw landmarks and bboxes
-        '''
+            if isDrawingOn:
+                for lm in regressed_landmarks[0]:
+                    face_chip = cv2.circle(face_chip, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor, -1)
 
-        if isDrawingOn:
-            if not landmarks is None:
-                for lm in landmarks[currentImageNum]:
-                    currentImage = cv2.circle(currentImage, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor1,
-                                              -1)
-            if not bboxes is None:
-                for face in bboxes[currentImageNum].astype('int32'):
-                    currentImage = cv2.rectangle(currentImage, (face[0], face[1]), (face[2], face[3]), bbox_color,
-                                                 bbox_thickness)
+                face_chip = cv2.flip(face_chip, 1) # For webcam mirroring
 
-        if not isDrawingOn:
-            cv2.imshow('Visualizer', currentSourceImage)
+                current_frame = face_chip
+
         else:
-            cv2.imshow('Visualizer', currentImage)
+            pass
+
+        cv2.imshow("ESR v1", current_frame)
 
         # Process keyboard input
         key = cv2.waitKey(1) & 0xFF

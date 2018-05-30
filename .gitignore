@@ -7,3 +7,4 @@ face_detection/__pycache__/*
 .DS_Store
 /utils/__pycache__/*
 profiling_*
+__pycache__/
