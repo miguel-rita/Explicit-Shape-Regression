@@ -1,4 +1,4 @@
-import os, random, glob, tqdm, pickle
+import os, random, glob, tqdm, pickle, time, datetime
 import numpy as np
 import cv2 as cv2
 from scipy.linalg import orthogonal_procrustes
@@ -19,9 +19,18 @@ class ESRegressor:
     3rd - Infer using 'test' method
     '''
 
-    def __init__(self, training_images, ground_truths, num_augmentation, num_test_shapes):
+    def __init__(self):
         '''
-        Constructor, will augment training set by default and convert all images to BW
+        Class constructor. Most initializations are done through the 'train' method
+        '''
+
+        self.stage_regressors = []
+
+    def train(self, training_images, ground_truths, num_augmentation, max_num_test_shapes,
+              num_features = 400, local_random_displacement = 25, num_stages = 10, num_ferns = 500,
+              num_fern_levels = 5, save_weights = None):
+        '''
+        Train the ESRegressor, augmenting the training set and converting all images to BW
         
         :param training_images: (list) BGR training images as numpy arrays
         :param ground_truths: (list) Landmark (x,y) global coordinates as num-by-2 numpy arrays,
@@ -29,44 +38,7 @@ class ESRegressor:
         :param num_augmentation: (int) Number of times to augment training dataset, ie. for each
         ground truth shape and image we'll have 'num_augmentation' different starting positions for
         landmark offset computations
-        :param num_test_shapes:(int) Max number of predefined starting shapes for bagging results at test time
-        '''
-
-        # 1. Initialize the training set and testing predefined shapes
-
-        self.training_set = [] # Will contain training lists in the format [image, ground_truth, start_pos]
-        self.test_start_shapes = [] # Will contain fixed test start shapes for bagging
-
-        for i, (img, ground_truth) in enumerate(zip(training_images, ground_truths)):
-
-            # Convert img to BW
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-            # Get 'num_augmentation' indexes without replacement
-            unique_starting_positions = random.sample(range(0,len(ground_truths)), num_augmentation)
-
-            for start_pos in unique_starting_positions:
-                self.training_set.append([img, ground_truth, np.copy(ground_truths[start_pos])])
-
-        testing_start_positions = random.sample(range(0, len(ground_truths)), num_test_shapes)
-
-        for pos in testing_start_positions:
-            self.test_start_shapes.append(np.copy(ground_truths[pos]))
-
-        # 2. Initialize mean shape
-
-        self.mean_shape = np.mean(ground_truths, axis=0)
-
-        # 3. Other initializations
-
-        self.number_of_landmarks = len(ground_truths[0])
-        self.stage_regressors = []
-
-    def train(self, num_features = 400, local_random_displacement = 25, num_stages = 10,
-              num_ferns = 500, num_fern_levels = 5, save_weights = None):
-        '''
-        Train the ESRegressor
-        
+        :param max_num_test_shapes:(int) Max number of predefined starting shapes for bagging results at test time
         :param num_features: (int) Number of features to sample per image
         :param local_random_displacement: (int) Range of uniform random noise when determining feature points
         in local landmark coordinates, in pixels
@@ -77,11 +49,39 @@ class ESRegressor:
         :return: --
         '''
 
-        # Property assignments
+        # 1. Initialize and augment training set
+
+        self.training_set = []  # Will contain training lists in the format [image, ground_truth, start_pos]
+        self.test_start_shapes = []  # Will contain fixed test start shapes for bagging
+
+        for i, (img, ground_truth) in tqdm.tqdm(enumerate(zip(training_images, ground_truths)),
+                                                total=len(training_images),
+                                                unit=' images',
+                                                desc='Loading train images into regressor. . .'):
+
+            # Convert img to BW
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Get 'num_augmentation' indexes without replacement
+            unique_starting_positions = random.sample(range(0, len(ground_truths)), num_augmentation)
+
+            for start_pos in unique_starting_positions:
+                self.training_set.append([img, ground_truth, np.copy(ground_truths[start_pos])])
+
+        # 2. Initialize mean shape
+        self.mean_shape = np.mean(ground_truths, axis=0)
+
+        # 3. Initialize predefined testing starting shapes
+        self.test_start_shapes = self.initialize_test_shape(max_num_test_shapes, random_translation=20,
+                              random_rotation=45, random_scaling=0.25)
+
+        # 4. Other initializations
+
+        self.number_of_landmarks = len(ground_truths[0])
         self.num_features = num_features
 
         for stage in tqdm.tqdm(range(0, num_stages), total=num_stages, unit='stage',
-                               desc='Overall training progress', position=0): # For each stage in the regressor, we must ...
+                               desc='Overall training progress', position=0):
 
             Y_normalized_targets = [] # Will contain normalized targets for this stage
             M_inverse_transforms = [] # Will contain normal transformations for this stage
@@ -90,43 +90,17 @@ class ESRegressor:
             self.progress_current_stage_num_being_trained = stage + 1
             self.total_num_stages = num_stages
 
-            tset_shapes = np.array([t[2] for t in self.training_set])
-            shapes_armax = np.unravel_index(np.argmax(tset_shapes), tset_shapes.shape)
-            shapes_armin = np.unravel_index(np.argmin(tset_shapes), tset_shapes.shape)
-
             # I. Compute normalized targets
 
-            for img, ground_truth, start_pos in self.training_set: # ... compute the regression targets, for
-                # each element in training set
+            for img, ground_truth, start_pos in self.training_set:
 
-                # Unused code below \/
+                # 1. Get the orthogonal transform to the mean shape (considering scaling was already applied)
+                normalizing_transform, _ = orthogonal_procrustes(start_pos, self.mean_shape)
 
-                # 1. Normalize start_pos scale to match mean_shape scale
-                # Check https://en.wikipedia.org/wiki/Procrustes_analysis for details
-                # We're assuming start_pos and mean_shape have same average position already. Simplifying assumption
-                # to remove translation adjustment also done in the paper.
-
-                # Calculate scaling factor (to go from start_pos scale to mean_shape scale)
-                # scaling_factor = np.sum(self.mean_shape**2) / np.sum(start_pos**2)
-
-                # End of unused code /\
-
-                # NOTE: Although scaling is used in the paper, for training datasets with large pose variation
-                # the assumption of mean landmark position at the origin is not true, which would greatly distort
-                # procrustes scaling. Hence we chose to complicate the model by sacrificing scale invariance
-
-                scaling_factor = 1.0
-
-                # 2. Get the orthogonal transform to the mean shape (considering scaling was already applied)
-                normalizing_transform, _ = orthogonal_procrustes(start_pos * scaling_factor, self.mean_shape)
-
-                # 2.5. Add scale to orthogonal transform matrix. These are the 'M' matrices in the paper
-                normalizing_transform *= scaling_factor
-
-                # 3. Get the regression target and normalize to 'mean shape space'
+                # 2. Get the regression target and normalize to 'mean shape space'
                 Y_normalized_targets.append( np.matmul((ground_truth - start_pos), normalizing_transform) )
 
-                # Also store inverse transforms M^-1
+                # 3. Store inverse transforms M^-1
                 M_inverse_transforms.append(np.linalg.inv(normalizing_transform))
 
             # Flatten normalized targets - from a list of targets of len = number of training samples, where each
@@ -138,12 +112,13 @@ class ESRegressor:
             ynt_posavg = np.average(ynt[ynt>0])
             ynt_avg = np.average(ynt)
             ynt_var = np.var(ynt)
-            ynt_argmax = np.unravel_index(np.argmax(ynt), ynt.shape)
-            ynt_argmin = np.unravel_index(np.argmin(ynt), ynt.shape)
-            print("\nRegression target info for stage", str(stage),":")
+
+            print("\n\n***************************************")
+            print("Regression target info for stage", str(stage),":")
             print("Average:",ynt_avg)
             print("Positive average:",ynt_posavg)
             print("Std dev:",np.sqrt(ynt_var))
+            print("***************************************\n")
 
             # II. Train and store current stage regressor
 
@@ -161,7 +136,7 @@ class ESRegressor:
 
             # 3. Finally train the stage regressor. Note 'pixel_feats' were computed outside 'train_stage_regressor'
             # function to be reused below (see step III.)
-            current_stage_regressor = self.train_stage_regressor(Y_normalized_targets, num_features, num_ferns,
+            current_stage_regressor = self.train_stage_regressor(Y_normalized_targets, num_ferns,
                                                                  num_fern_levels, pixel_feats)
 
             self.stage_regressors.append((current_stage_regressor, local_coords))
@@ -172,22 +147,31 @@ class ESRegressor:
                                                                [t[2] for t in self.training_set])
 
             csr = np.array(stage_regressor_output)
-            crs_argmax = np.unravel_index(np.argmax(csr), csr.shape)
-            crs_argmin = np.unravel_index(np.argmin(csr), csr.shape)
+
             for i in range(len(self.training_set)):
                 self.training_set[i][2] += np.matmul(stage_regressor_output[i], M_inverse_transforms[i])
 
         if save_weights is not None:
+
+            # Pack dictionary to pickle
+            save_dict = {
+                'weights' : self.stage_regressors,
+                'mean_shape' : self.mean_shape,
+                'test_shapes' : self.test_start_shapes,
+                'num_features' : self.num_features
+            }
+
             with open(save_weights, 'wb') as h:
-                pickle.dump(self.stage_regressors, h, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(save_dict, h, protocol=pickle.HIGHEST_PROTOCOL)
 
     def test(self, images, bagging_size):
         '''
-        TODO - BW
+        Regressor testing function - will output regressed shapes for all the specified images
         
-        :param images: 
-        :param bagging_size: 
-        :return: 
+        :param images: (list) List of images to regress landmarks
+        :param bagging_size: (int) Number of times to run the regressor per image, after which
+        the median result is picked
+        :return: (list) List of regressed landmarks, each n-by-2 numpy array where n = number of landmarks
         '''
 
         if bagging_size > len(self.test_start_shapes):
@@ -200,8 +184,16 @@ class ESRegressor:
         initialized_images = []
 
         for img in images:
+
+            _h, _w, num_channels = img.shape
+
+            # If color image must convert to grayscale
+
+            if num_channels == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
             for i in range(bagging_size):
-                initialized_images.append([cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), np.copy(self.test_start_shapes[i])])
+                initialized_images.append([img, np.copy(self.test_start_shapes[i])])
 
         # Regress shapes for this stage
         for stage_regressor in self.stage_regressors:
@@ -240,28 +232,87 @@ class ESRegressor:
 
         return final_shapes
 
-    def load_weights(self, saved_weights_path):
+    def initialize_test_shape(self, max_num_test_shapes, random_translation=20,
+                              random_rotation=45, random_scaling=0.25):
         '''
-        TODO
+        Initializes in memory 'max_num_test_shapes' for use at test time. Note that
+        at test time any number of test shapes can be used, from one up to 'max_num_test_shapes'.
+        The initialized shapes are obtaining by applying random translations, rotations and
+        scaling to 'self.mean_shape'
+
+        :param max_num_test_shapes: (int) Maximum number of predefined test shapes available in memory. Maximum number
+        of test shapes that can be used at test time
+        :param random_translation: (int) Random vertical and horizontal translation to apply to mean shape, in pixels
+        :param random_rotation: (float) Random rotation to apply to mean shape, in degrees ie. up to 'random_rotation'
+        degree rotation counter- or clock-wise around mass center
+        :param random_scaling: (float) Random scaling to apply to mean shape
+        :return: (list) List of random test shapes
+        '''
+
+        test_shapes = []
+
+        for i in range(max_num_test_shapes):
+
+            # Shape to be randomly transformed
+            current_test_shape = np.copy(self.mean_shape)
+
+            # Center around mean
+            mean_coords = np.mean(current_test_shape, axis=0)
+            current_test_shape -= mean_coords
+
+            # Apply random scaling, rotation and translation
+
+            # Scaling
+            current_test_shape *= np.random.uniform(1-random_scaling, 1+random_scaling)
+
+            # Rotation
+            theta_rot = np.deg2rad(np.random.uniform(-random_rotation, random_rotation))
+            cos, sin = np.cos(theta_rot), np.sin(theta_rot)
+            rot_matrix = np.array([
+                [cos, -sin],
+                [sin, cos]
+            ])
+            current_test_shape = np.matmul(current_test_shape, rot_matrix)
+
+            # Translation
+            xy_translation = np.array([
+                np.random.uniform(-random_translation, random_translation),
+                np.random.uniform(-random_translation, random_translation)
+                ])
+            current_test_shape -= xy_translation
+
+            # Add back mean values to re-center shape
+            current_test_shape += mean_coords
+
+            test_shapes.append(current_test_shape)
+
+        return test_shapes
+
+    def load_trained_regressor(self, savefile_path):
+        '''
+        Loads and sets up a previously trained regressor from a savefile
         
-        :param saved_weights_path: 
-        :return: 
+        :param savefile_path: (str) Path to regressor savefile
+        :return: --
         '''
 
-        # Load stage regressors. Each regressor is a pair (regressor parameters, associated local coords)
-        with open(saved_weights_path, 'rb') as h:
-            self.stage_regressors = pickle.load(h)
+        # Load saved data, including stage regressors. Remember each regressor
+        # is a pair (regressor parameters, associated local coords)
 
-        # Update class properties
-        self.num_features = len(self.stage_regressors[0][1]) # Infer number of features used by regressors
+        with open(savefile_path, 'rb') as h:
+            saved_dict = pickle.load(h)
+            self.stage_regressors = saved_dict['weights']
+            self.mean_shape = saved_dict['mean_shape']
+            self.test_start_shapes = saved_dict['test_shapes']
+            self.num_features = saved_dict['num_features']
 
-    def train_stage_regressor(self, Y_normalized_targets, num_features, num_ferns, num_fern_levels,
+
+    def train_stage_regressor(self, Y_normalized_targets, num_ferns, num_fern_levels,
                               pixel_features, threshold_multiplier = 0.2, beta = 5):
         '''
         Train a stage regressor, comprised of 'num_ferns' ferns, each with 'num_fern_levels' decision levels
         
-        :param Y_normalized_targets: 
-        :param num_features: 
+        :param Y_normalized_targets:
         :param num_ferns: 
         :param num_fern_levels: 
         :param pixel_features: 
@@ -499,17 +550,24 @@ class ESRegressor:
                 landmark_coords_in_start_pos = current_shapes[i][local_coords[j, 0], :]
 
                 # Transform the local coords back to 'start_pos space'
+
                 local_coords_transformed_back_to_start_pos = np.matmul(inverse_transforms[i],
                                                                        local_coords[j, 1:])
                 global_coords = local_coords_transformed_back_to_start_pos + landmark_coords_in_start_pos
                 global_coordinates[j, 2 * i:2 * i + 2] = global_coords
 
-                # TODO : Ensure global coords do not go outside image
+                # Ensure coordinates do not go outside image
+
+                y = int(global_coords[1])
+                x = int(global_coords[0])
+
+                img_height, img_width = images[i].shape
+
+                y = np.clip(y, 0, img_height - 1)
+                x = np.clip(x, 0, img_width - 1)
 
                 # Grab pixels from the start_pos image
-                a = pixel_feats[i, j]
-                b = images[i][int(global_coords[1]), int(global_coords[0])]
-                pixel_feats[i, j] = images[i][int(global_coords[1]), int(global_coords[0])]
+                pixel_feats[i, j] = images[i][y, x]
 
         return pixel_feats
 
@@ -517,8 +575,10 @@ class ESRegressor:
         '''
         Generate random local coordinate offsets relative to random landmarks
         
-        :param local_random_displacement: 
-        :return: TODO
+        :param local_random_displacement: (int) Limit to the range of random offset, in pixels, that will be used
+        to produce random local coordinates
+        :return: (np array) A n-by-3 array where n is the number of features and each line is as follows:
+        [index of landmark selected as basis for local coord, random x offset to apply, random y offset to apply]
         '''
         displacements = np.random.randint(-local_random_displacement, local_random_displacement,
                                                  size=(self.num_features, 2)) # Offsets to add to each landmark location
@@ -530,66 +590,108 @@ class ESRegressor:
 
 def main():
     '''
-    Testing function for class ESRegressor
+    Debugging function for class ESRegressor
     
     :return: --
     '''
 
     # Load processed images and landmarks
 
-    datasetName = 'AFW/'
+    dataset_names = ['LFPW/']#['AFW/', 'HELEN/', 'IBUG/', 'LFPW/']
     imageExtension = '.jpg'
 
-    os.chdir('./processed_data/' + datasetName)  # switch to dataset dir
-    image_names = glob.glob('*' + imageExtension)
-    image_names = [n.split('.')[0] for n in image_names]  # Get filenames without extension
+    image_names = []
 
-    image_names_indexes = [int(n.split('_')[-1]) for n in image_names]
+    for dataset_name in dataset_names:
 
-    pose_max = 4
-    small_pose_image_names = []
-    for i, index in enumerate(image_names_indexes):
-        if index < pose_max:
-            small_pose_image_names.append(image_names[i])
+        # Switch to dataset dir
+
+        temp_image_names = glob.glob('processed_data/' + dataset_name +'*' + imageExtension)
+
+        # Get filenames without extension
+
+        image_names.extend([n.split('.')[0] for n in temp_image_names])
 
     images = []
     landmarks = []
 
-    for img_name in small_pose_image_names[:-100]:
+    for img_name in tqdm.tqdm(image_names[:5000], total=len(image_names), unit=' images', desc='Loading image files. . .'):
+
         # Load image
+
         images.append(cv2.imread(img_name + imageExtension))
+
         # Load landmarks
+
         landmarks.append(loadmat(img_name + '_pts.mat')['pts_2d'])
 
-    # 1st. Instantiate Regressor
+    # Get timestamp
 
-    os.chdir('../..')
+    ts = time.time()
+    st = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d_%H:%M:%S')
+
+    # Setup savefile settings
+
     pwd = os.getcwd()
-    weights_path = pwd + '/processed_data/esr_weights_v1beta.pickle'
-    os.chdir('./processed_data/' + datasetName)
+    weights_path = pwd + '/processed_data/esr_savefile_'+st+'.pickle'
 
-    R = ESRegressor(images, landmarks, 20, 20)
+    # Instantiate regressor
 
-    print("Save path:",weights_path,"Train set len:",len(images))
-    R.train(num_features=100, num_stages=1, num_ferns=100, local_random_displacement=15, save_weights=weights_path)
-    R.load_weights(weights_path)
+    R = ESRegressor()
+
+    # Train regressor
+
+    print("Save path:", weights_path, "\nTrain set num. of images:", len(images), '\n')
+    R.train(
+        training_images = images,
+        ground_truths = landmarks,
+        num_augmentation = 20,
+        max_num_test_shapes = 20,
+        num_features = 200,
+        local_random_displacement = 20,
+        num_stages = 7,
+        num_ferns = 250,
+        num_fern_levels = 5,
+        save_weights = weights_path,
+    )
+
+    #R.load_trained_regressor('/home/lanfear/Explicit-Shape-Regression/processed_data/esr_savefile_2018-05-31_17:39:03.pickle')
 
     # Grab some images for testing
+
     test_images = []
     test_landmarks = []
 
-    for img_name in small_pose_image_names[-100:]:
-        # Load image
-        test_images.append(cv2.imread(img_name + imageExtension))
-        # Load landmarks
-        test_landmarks.append(loadmat(img_name + '_pts.mat')['pts_2d'])
+    for img_name in image_names[40:60]:
 
-    # regressed_landmarks = R.test(test_images, 15)
-    # visualizer(test_images, landmarks=regressed_landmarks)
+        # Load image
+
+        test_images.append(cv2.imread(img_name + imageExtension))
+
+        # Load landmarks
+
+        #test_landmarks.append(loadmat(img_name+'_pts.mat')['pts_2d'])
+
+    regressed_landmarks = R.test(test_images, 5)
+
+    visualizer(images=test_images, landmarks=regressed_landmarks)
 
 if __name__ == '__main__':
-    log_name = os.getcwd() + '/profiling_log2.txt'
+
+    # Get timestamp
+
+    ts = time.time()
+    st = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d_%H:%M:%S')
+
+    # Setup logging variables
+
+    log_name = os.getcwd() + '/esr_log_'+ st +'.txt'
+
+    # Run code with profiling
+
     cProfile.run('main()', log_name)
+
+    # Analyse profiling
+
     p = pstats.Stats(log_name)
-    p.strip_dirs().sort_stats('line').print_stats()
-    p.sort_stats('cumulative').print_callees('correlation_feature_selection')
+    p.strip_dirs().sort_stats('cumulative').print_stats()

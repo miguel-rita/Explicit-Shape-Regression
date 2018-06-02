@@ -1,10 +1,11 @@
 /data/*
 /.idea/*
 /processed_data/*
+!/processed_data/esr_savefile*
 !data.txt
 !processed_data.txt
 face_detection/__pycache__/*
 .DS_Store
 /utils/__pycache__/*
-profiling_*
+esr_log_*
 __pycache__/

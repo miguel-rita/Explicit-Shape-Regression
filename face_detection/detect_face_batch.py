@@ -17,9 +17,10 @@ def detect_face_batch(image_list, image_names, are_images_rgb = True, minimum_wi
     :param minimum_window_size: (int) Minimum face size to be searched in the pictures, in pixels
     :param thresholds: (list) List of 3 floats representing discarding confidence thresholds at each stage in cascade
     :param pyramid_scaling_factor: (float) Float representing scaling factor when building image pyramid
-    :return: (tuple(list, list)) Tuple of two lists: 1st list - List of detected faces, in numpy array format.
+    :return: (tuple(list, list, list)) Tuple of three lists: 1st list - List of detected faces, in numpy array format.
     Each element of the list is a n-by-m matrix, where n is the number of faces detected
-    and m=5 as follows [xmin ymin xmax ymax confidence]. 2nd list - Corresponding image names
+    and m=5 as follows [xmin ymin xmax ymax confidence]. 2nd list - Corresponding image names, 3rd list - Corresponding
+    image indexes in 'image_list'
     '''
 
     '''
@@ -42,10 +43,11 @@ def detect_face_batch(image_list, image_names, are_images_rgb = True, minimum_wi
 
     faces_list = []
     names_list = []
+    index_list = []
     number_of_images = len(image_list)
 
-    print('STATUS: Detecting faces ...')
-    for img, img_name in tqdm.tqdm(zip(image_list, image_names), total=number_of_images, unit=' images'):
+    for i, (img, img_name) in tqdm.tqdm(enumerate(zip(image_list, image_names)), total=number_of_images, unit=' images',
+                                   desc='Detecting faces using MTCNN'):
 
         if not are_images_rgb:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # MTCNN trained on RGB images
@@ -59,15 +61,17 @@ def detect_face_batch(image_list, image_names, are_images_rgb = True, minimum_wi
         num_faces_found, _ = faces.shape
 
         if num_faces_found < 1: # If no faces found append None placeholder
-            print('\nWARNING: No faces found in file ' + img_name)
+            print('\nWARNING: No faces found in file ' + img_name + '\n')
             continue
 
         faces_list.append(faces)
         names_list.append(img_name)
+        index_list.append(i)
 
     sess.close()
+    tf.reset_default_graph() # To clear all variables
 
-    return (faces_list, names_list)
+    return (faces_list, names_list, index_list)
 
 def detect_face_batch_from_directory(image_directory, image_extension = '.jpg', minimum_window_size = 40, thresholds = [.6, .7, .7],
                       pyramid_scaling_factor = .709):

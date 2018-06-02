@@ -10,6 +10,7 @@ def visualizer(images, bboxes=None, landmarks=None):
     Press 'S' to toggle landmarks/bboxes on/off
     Press 'A'/'D' for previous/next image
     Press 'Q' to quit visualizer
+    Press 'N' to display landmark numbers
       
     :param images: (list of np arrays) list of BGR input images to visualize
     :param bboxes: (list of np arrays) list of faces found per image (optional)
@@ -23,12 +24,15 @@ def visualizer(images, bboxes=None, landmarks=None):
     landmarkColor1 = (0, 255, 0)
     bbox_color = (0, 0, 255)
     bbox_thickness = 2
+    lm_number_text_offset = (3, 3)
+    lm_number_size = 0.275
 
     # Flow control params
     visualizerRunning = True
     currentImageNum = 0
 
     isDrawingOn = True
+    is_draw_numbers_on = True
 
     while visualizerRunning:
         currentSourceImage = images[currentImageNum]
@@ -36,8 +40,17 @@ def visualizer(images, bboxes=None, landmarks=None):
 
         if isDrawingOn:
             if not landmarks is None:
-                for lm in landmarks[currentImageNum]:
+                for lm_number, lm in enumerate(landmarks[currentImageNum]):
                     currentImage = cv2.circle(currentImage, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor1, -1)
+
+                    if is_draw_numbers_on:
+                        cv2.putText(currentImage, str(lm_number),
+                                    (int(lm[0] + lm_number_text_offset[0]), int(lm[1]) + lm_number_text_offset[1]),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    lm_number_size,
+                                    landmarkColor1,
+                                    )
+
             if not bboxes is None:
                 for face in bboxes[currentImageNum].astype('int32'):
                     currentImage = cv2.rectangle(currentImage, (face[0], face[1]), (face[2], face[3]), bbox_color,
@@ -57,6 +70,8 @@ def visualizer(images, bboxes=None, landmarks=None):
             currentImageNum += 1
         if key == ord('s'):
             isDrawingOn = not isDrawingOn
+        if key == ord('n'):
+            is_draw_numbers_on = not is_draw_numbers_on
         if key == ord('q'):  # Quit visualization
             print('Quitting visualization ...')
             visualizerRunning = False
@@ -110,7 +125,7 @@ def test2():
 
     # Load processed images and landmarks
 
-    datasetName = 'testAFW/' # pick numImages first images from this dataset
+    datasetName = 'testAFW/'
     imageExtension = '.jpg'
 
     os.chdir('../processed_data/'+datasetName) # switch to dataset dir
