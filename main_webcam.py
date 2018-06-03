@@ -1,4 +1,4 @@
-import os
+import os, time, datetime, cProfile, pstats
 import numpy as np
 import cv2
 import face_detection.detect_face as mtcnn
@@ -108,7 +108,7 @@ def main():
             face_chip = cv2.resize(face_chip, face_chip_size)
 
             # Regress landmarks
-            regressed_landmarks = R.test([face_chip], 15)
+            regressed_landmarks = R.test([face_chip], 5)
 
             # Only 1 frame
             regressed_landmarks = regressed_landmarks[0]
@@ -141,4 +141,26 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+
+    # Get timestamp
+
+    ts = time.time()
+    st = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d_%H:%M:%S')
+
+    # Setup logging variables
+
+    #log_name = os.getcwd() + '/esr_webcam_log_' + st + '.txt'
+
+    # Run code with profiling
+
+    #cProfile.run('main()', log_name)
+
+    # Analyse profiling
+
+    log_name = '/Users/miguelrita/Documents/Paper Implementations/esr/esr_webcam_log_2018-06-03_17:31:19.txt'
+
+    p = pstats.Stats(log_name)
+    p.strip_dirs().sort_stats('cumulative').print_callees('extract_shape_indexed_pixels')
+    p.strip_dirs().sort_stats('cumulative').print_callees('test_stage_regressor')
+    p.strip_dirs().sort_stats('cumulative').print_callees('compute_fern_bin')
+    p.strip_dirs().sort_stats('cumulative').print_callees('test')
