@@ -565,8 +565,10 @@ class ESRegressor:
 
                 img_height, img_width = images[i].shape
 
-                y = np.clip(y, 0, img_height - 1)
-                x = np.clip(x, 0, img_width - 1)
+                if y >= img_height - 1:
+                    y = np.clip(y, 0, img_height - 1)
+                if x >= img_width - 1:
+                    x = np.clip(x, 0, img_width - 1)
 
                 # Grab pixels from the start_pos image
                 pixel_feats[i, j] = images[i][y, x]
