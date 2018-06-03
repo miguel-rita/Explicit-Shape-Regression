@@ -130,12 +130,14 @@ class ESRegressor:
             # Reminder : training_set stores a list for each training sample, with list[0] being the image, [1] being
             # the ground truth and [2] the starting position at this stage
 
+            print('Extracting pixel features for stage ' + str(stage) + '. . .')
             pixel_feats = self.extract_shape_indexed_pixels([t[0] for t in self.training_set],
                                                             [t[2] for t in self.training_set],
                                                             local_coords, M_inverse_transforms)
 
             # 3. Finally train the stage regressor. Note 'pixel_feats' were computed outside 'train_stage_regressor'
             # function to be reused below (see step III.)
+            print('Training stage ' + str(stage) + ' regressors. . .')
             current_stage_regressor = self.train_stage_regressor(Y_normalized_targets, num_ferns,
                                                                  num_fern_levels, pixel_feats)
 
@@ -599,7 +601,7 @@ def main():
 
     # Load processed images and landmarks
 
-    dataset_names = ['LFPW/']#['AFW/', 'HELEN/', 'IBUG/', 'LFPW/']
+    dataset_names = ['AFW/', 'HELEN/', 'IBUG/', 'LFPW/']
     imageExtension = '.jpg'
 
     image_names = []
@@ -608,7 +610,23 @@ def main():
 
         # Switch to dataset dir
 
-        temp_image_names = glob.glob('processed_data/' + dataset_name +'*' + imageExtension)
+        temp_all_image_names = glob.glob('processed_data/' + dataset_name +'*' + imageExtension)
+
+        # Keep only small/medium pose image names
+
+        max_pose = 3
+
+        temp_image_names = []
+        for name in temp_all_image_names:
+            split_name = name.split('_')
+            pose_num = -1
+            if split_name[-1][0] == 'f': # If flipped image
+                pose_num = int(split_name[-2])
+            else:
+                pose_num = int(split_name[-1].split(imageExtension)[0])
+
+            if pose_num <= max_pose:
+                temp_image_names.append(name)
 
         # Get filenames without extension
 
@@ -617,7 +635,7 @@ def main():
     images = []
     landmarks = []
 
-    for img_name in tqdm.tqdm(image_names[:5000], total=len(image_names), unit=' images', desc='Loading image files. . .'):
+    for img_name in tqdm.tqdm(image_names, total=len(image_names), unit=' images', desc='Loading image files. . .'):
 
         # Load image
 
@@ -649,10 +667,10 @@ def main():
         ground_truths = landmarks,
         num_augmentation = 20,
         max_num_test_shapes = 20,
-        num_features = 200,
+        num_features = 400,
         local_random_displacement = 20,
-        num_stages = 7,
-        num_ferns = 250,
+        num_stages = 10,
+        num_ferns = 500,
         num_fern_levels = 5,
         save_weights = weights_path,
     )

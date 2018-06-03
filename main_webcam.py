@@ -43,8 +43,6 @@ def main():
 
     R = ESRegressor.ESRegressor()
 
-    R.number_of_landmarks = 68
-
     R.load_trained_regressor(savefile_path)
 
     '''
