@@ -1,7 +1,6 @@
 /data/*
 /.idea/*
 /processed_data/*
-!/processed_data/esr_savefile*
 !data.txt
 !processed_data.txt
 face_detection/__pycache__/*

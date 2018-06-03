@@ -1,7 +1,7 @@
-import os, glob
+import os
+import numpy as np
 import cv2
 import face_detection.detect_face as mtcnn
-from scipy.io import loadmat
 import tensorflow as tf
 import ESRegressor
 from utils.extract_chip import extract_chip
@@ -26,7 +26,7 @@ def main():
     pnet, rnet, onet = mtcnn.create_mtcnn(sess, None)
 
     # Set cascade parameters
-    minsize = 90  # Minimum window size to be detected in pixels
+    minsize = 60  # Minimum window size to be detected in pixels
     threshold = [.6, .7, .7]  # Quality threshold for all cascade levels
     factor = .709  # Image pyramid scaling factor
 
@@ -34,23 +34,18 @@ def main():
     Initialize ESR regressor
     '''
 
+    # Fac detection settings
+    face_chip_size = (200, 200)
+    bbox_scale = 1.5
+
     pwd = os.getcwd()
-    weights_path = pwd + '/processed_data/esr_weights_v3.pickle'
-    os.chdir('./processed_data/AFW')
+    savefile_path = pwd + '/processed_data/esr_savefile_2018-06-02_19_00_24.pickle'
 
-    # Load some landmarks (and images) to provide for initializing shapes
-    landmark_names = glob.glob('*.mat')
-    image_names = glob.glob('*.jpg')
-    ground_truth_landmarks = []
-    sample_images = []
-    for lm_name in landmark_names:
-        ground_truth_landmarks.append(loadmat(lm_name)['pts_2d'])
-    for img in image_names[:50]:
-        sample_images.append(cv2.imread(img))
+    R = ESRegressor.ESRegressor()
 
-    R = ESRegressor.ESRegressor(sample_images, ground_truth_landmarks, 20, 20)
+    R.number_of_landmarks = 68
 
-    R.load_weights(weights_path)
+    R.load_trained_regressor(savefile_path)
 
     '''
     Other initializations
@@ -75,13 +70,14 @@ def main():
 
     while visualizerRunning:
 
-        ret, bgr_frame = webcam.read()
+        is_ok, bgr_frame = webcam.read()
 
         '''
         Detect faces
         '''
 
         current_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)  # MTCNN reads RGB images
+        current_frame = cv2.flip(current_frame, 1)  # For webcam mirroring
 
         # Run MTCNN detector
         # Output 'faces' is a n-by-m matrix where n is the num of faces detected and m=5 has bounding box info for each
@@ -100,30 +96,39 @@ def main():
             '''
             Extract face chip
             '''
-            scale = 2.0
-            face_chip, final_bbox = extract_chip(current_frame, faces[0, :-1], scale)
+            bbox = faces[0, :-1]
+            face_chip, final_bbox = extract_chip(current_frame, np.copy(bbox), bbox_scale)
 
             '''
             Detect landmarks for all detected faces
             '''
 
-            face_chip = cv2.resize(face_chip, (450, 450))
-            regressed_landmarks = R.test([face_chip], 20)
+            # Get scaling that will be done to later determine landmark position in original frame
+            scaling = face_chip_size[1] / (final_bbox[2] - final_bbox[0])
+
+            # Resize to feed regressor
+            face_chip = cv2.resize(face_chip, face_chip_size)
+
+            # Regress landmarks
+            regressed_landmarks = R.test([face_chip], 15)
+
+            # Only 1 frame
+            regressed_landmarks = regressed_landmarks[0]
+
+            # Restore correct scale
+            regressed_landmarks /= scaling
+
+            # Restore correct offsets
+            regressed_landmarks[:, 0] += final_bbox[0]
+            regressed_landmarks[:, 1] += final_bbox[1]
 
             '''
             Draw landmarks and bboxes
             '''
 
             if isDrawingOn:
-                for lm in regressed_landmarks[0]:
-                    face_chip = cv2.circle(face_chip, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor, -1)
-
-                face_chip = cv2.flip(face_chip, 1) # For webcam mirroring
-
-                current_frame = face_chip
-
-        else:
-            pass
+                for lm in regressed_landmarks:
+                    current_frame = cv2.circle(current_frame, (int(lm[0]), int(lm[1])), landmarkRadius, landmarkColor, -1)
 
         cv2.imshow("ESR v1", current_frame)
 

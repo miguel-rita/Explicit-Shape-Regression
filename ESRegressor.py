@@ -158,7 +158,8 @@ class ESRegressor:
                 'weights' : self.stage_regressors,
                 'mean_shape' : self.mean_shape,
                 'test_shapes' : self.test_start_shapes,
-                'num_features' : self.num_features
+                'num_features' : self.num_features,
+                'num_landmarks' : self.number_of_landmarks,
             }
 
             with open(save_weights, 'wb') as h:
@@ -305,6 +306,7 @@ class ESRegressor:
             self.mean_shape = saved_dict['mean_shape']
             self.test_start_shapes = saved_dict['test_shapes']
             self.num_features = saved_dict['num_features']
+            #self.number_of_landmarks = saved_dict['num_landmarks']
 
 
     def train_stage_regressor(self, Y_normalized_targets, num_ferns, num_fern_levels,
