@@ -148,8 +148,6 @@ class ESRegressor:
                                                                pixel_feats, [t[0] for t in self.training_set],
                                                                [t[2] for t in self.training_set])
 
-            csr = np.array(stage_regressor_output)
-
             for i in range(len(self.training_set)):
                 self.training_set[i][2] += np.matmul(stage_regressor_output[i], M_inverse_transforms[i])
 
@@ -308,7 +306,7 @@ class ESRegressor:
             self.mean_shape = saved_dict['mean_shape']
             self.test_start_shapes = saved_dict['test_shapes']
             self.num_features = saved_dict['num_features']
-            #self.number_of_landmarks = saved_dict['num_landmarks']
+            self.number_of_landmarks = saved_dict['num_landmarks']
 
 
     def train_stage_regressor(self, Y_normalized_targets, num_ferns, num_fern_levels,
@@ -641,7 +639,7 @@ def main():
 
         # Load image
 
-        images.append(cv2.imread(img_name + imageExtension))
+        #images.append(cv2.imread(img_name + imageExtension))
 
         # Load landmarks
 
@@ -669,34 +667,36 @@ def main():
         ground_truths = landmarks,
         num_augmentation = 20,
         max_num_test_shapes = 20,
-        num_features = 400,
+        num_features = 100,
         local_random_displacement = 20,
-        num_stages = 10,
-        num_ferns = 500,
+        num_stages = 1,
+        num_ferns = 5,
         num_fern_levels = 5,
         save_weights = weights_path,
     )
 
-    #R.load_trained_regressor('/home/lanfear/Explicit-Shape-Regression/processed_data/esr_savefile_2018-05-31_17:39:03.pickle')
+    #R.load_trained_regressor('esr_savefile_2018-06-03_19:20:54.pickle')
 
     # Grab some images for testing
 
     test_images = []
     test_landmarks = []
 
-    for img_name in image_names[40:60]:
+    for img_name in image_names[:10000]:
 
         # Load image
 
-        test_images.append(cv2.imread(img_name + imageExtension))
+        loaded_img = cv2.imread(img_name + imageExtension)
+        test_images.append(loaded_img)
+
+    for img in tqdm.tqdm(test_images):
 
         # Load landmarks
 
         #test_landmarks.append(loadmat(img_name+'_pts.mat')['pts_2d'])
+        test_landmarks.append(R.test([img], 5))
 
-    regressed_landmarks = R.test(test_images, 5)
-
-    visualizer(images=test_images, landmarks=regressed_landmarks)
+    visualizer(images=test_images, landmarks=test_landmarks)
 
 if __name__ == '__main__':
 
